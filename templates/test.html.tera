@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    <style>
+      table {
+        border-collapse: collapse;
+      }
+      table, th, td {
+        border: 1px solid;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>{{ title }}</h1>
+
+    <table>
+      <tr>
+        <th>Plant</th><th>Results</th><th>Admin</th><th>Host</th>
+      </tr>
+{% for plant in plants %}
+      <tr>
+        <td><a href="{{ test }}/{{ plant.name }}">{{ plant.name }}</a></td>
+        <td style="text-align: right;">{{ plant.results }}</td>
+        <td>{{ plant.admin }}</td>
+        <td>{{ plant.host }}</td>
+      </tr>
+{% endfor %}
+    </table>
+  </body>
+</html>

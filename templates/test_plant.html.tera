@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+  <html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>{{ title }} - {{ plant }}</title>
+    <style>
+      table {
+        border-collapse: collapse;
+      }
+      table, th, td {
+        border: 1px solid;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>{{ title }} - {{ plant }}</h1>
+{% for scale, branches in scales %}
+
+    <h2>{{ scale }} {{ unit }}</h2>
+  {% for branch, results in branches %}
+    {% if loop.first %}
+      {% set_global reversed_branches = [] %}
+    {% endif %}
+    {% set_global reversed_branches = [branch] | concat(with=reversed_branches) %}
+  {% endfor %}
+
+  {% for branch in reversed_branches %}
+    {% set results = branches[branch] %}
+
+    <h3>{{ branch }}</h3>
+
+    <table>
+      <tr>
+        <th>Commit Date</th><th>Commit</th><th>Metric ({{ metric_name }})</th>
+      </tr>
+    {% for result in results.reversed %}
+      <tr>
+        <td>{{ result.timestamp }}</td>
+        <td>
+          <a href="{{ postgres_commit_url }}/{{ result.revision }}" target="_blank">
+            {{ result.revision }}
+          </a>
+        </td>
+        <td style="text-align: right;">
+          <a href="{{ buildbot_url }}/#/builders/{{ result.builder_id }}/builds/{{ result.build_number }}" target="_blank">
+            {{ result.metric }}
+          </a>
+        </td>
+      </tr>
+    {% endfor %}
+    </table>
+  {% endfor %}
+{% endfor %}
+  </body>
+</html>

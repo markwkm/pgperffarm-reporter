@@ -1,0 +1,8 @@
+{
+"buildbot_url": "http://palamar.postgresql.org:8010",
+"listen_address": "0.0.0.0",
+"postgres_commit_url": "https://github.com/postgres/postgres/commit",
+"postgres_conninfo": "host=localhost dbname=perffarm",
+"postgres_path": "/home/markwkm/.local/src/pgperffarm-buildbot/tools/postgres",
+"port": 8080
+}

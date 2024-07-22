@@ -1,0 +1,8 @@
+{
+"buildbot_url": "https://perfffarm.postgresql.org",
+"listen_address": "0.0.0.0",
+"postgres_commit_url": "https://github.com/postgres/postgres/commit",
+"postgres_conninfo": "host=localhost dbname=perffarm",
+"postgres_path": "/usr/local/src/postgres",
+"port": 8080
+}
