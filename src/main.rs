@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -9,6 +10,8 @@ use actix_files::NamedFile;
 use actix_web::{get, web, App, HttpRequest, HttpResponse, HttpServer, Result};
 
 use chrono::{TimeZone, Utc};
+
+use csv::Writer;
 
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +69,16 @@ struct WorkerInfo {
     host: String,
 }
 
+#[derive(Serialize)]
+struct RawData {
+    branch: String,
+    revision: String,
+    scale: u32,
+    ctime: i64,
+    metric: f64,
+    complete_at: i32,
+}
+
 type ResultsByScale = BTreeMap<u32, ResultsByBranch>;
 type ResultsByBranch = BTreeMap<String, ResultsByTime>;
 
@@ -73,6 +86,182 @@ type ResultsByBranch = BTreeMap<String, ResultsByTime>;
 async fn home(req: HttpRequest) -> actix_web::Result<NamedFile> {
     let path = PathBuf::from([".", req.path(), "static/index.html"].join(""));
     Ok(NamedFile::open(path)?)
+}
+
+#[get("api/{test}/{plant}")]
+async fn api_test_plant(
+    data: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse> {
+    let (client, connection) = tokio_postgres::connect(data.postgres_conninfo.as_str(), NoTls)
+        .await
+        .map_err(|e| {
+            eprintln!("Failed to connect to the database: {}", e);
+            actix_web::error::ErrorInternalServerError("Database connection error")
+        })?;
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+
+    let (test, plant): (String, String) = path.into_inner();
+    let mut test2: String = test.clone();
+    test2.push_str("-%");
+
+    let rows = client
+        .query(
+            "WITH data AS (
+    SELECT coalesce(btrim(branch.value, '\"'), '') AS branch
+         , coalesce(
+               btrim(revision.value, '\"')
+             , btrim(got_revision.value, '\"')
+           ) AS revision
+         , coalesce(btrim(scale.value, '\"'), '0') AS scale
+         , builderid AS builder_id
+         , builds.number AS build_number
+         , log_summary.id AS log_summary_id
+         , coalesce(log_test1.id, log_test2.id) AS log_test_id
+         , builds.complete_at
+         , row_number() OVER (
+               PARTITION BY workers.name
+                          , branch.value
+                          , revision.value
+                          , scale.value
+               ORDER BY builds.complete_at DESC
+           ) AS latest
+    FROM workers
+         JOIN builds
+           ON builds.workerid = workers.id
+          AND builds.results = 0
+         JOIN builders
+           ON builderid = builders.id
+          AND (
+                  builders.name = $1
+               OR builders.name LIKE $2
+              )
+         LEFT OUTER JOIN build_properties AS branch
+           ON branch.buildid = builds.id
+          AND branch.name = 'branch'
+          AND branch.value <> '\"\"'
+         LEFT OUTER JOIN build_properties AS revision
+           ON revision.buildid = builds.id
+          AND revision.name = 'revision'
+          AND revision.value <> '\"\"'
+         LEFT OUTER JOIN build_properties AS got_revision
+           ON got_revision.buildid = builds.id
+          AND got_revision.name = 'got_revision'
+         LEFT OUTER JOIN build_properties AS scale
+           ON scale.buildid = builds.id
+          AND scale.name = 'warehouses'
+         LEFT OUTER JOIN steps AS step_summary
+           ON step_summary.buildid = builds.id
+          AND step_summary.name = $4
+         LEFT OUTER JOIN logs AS log_summary
+           ON log_summary.stepid = step_summary.id
+         LEFT OUTER JOIN steps AS step_test1
+           ON step_test1.buildid = builds.id
+          AND step_test1.name = 'Performance test'
+         LEFT OUTER JOIN logs AS log_test1
+           ON log_test1.stepid = step_test1.id
+         LEFT OUTER JOIN steps AS step_test2
+           ON step_test2.buildid = builds.id
+          AND step_test2.name = 'Performance test (force)'
+         LEFT OUTER JOIN logs AS log_test2
+           ON log_test2.stepid = step_test2.id
+    WHERE workers.name = $3
+    ORDER BY builds.complete_at DESC
+)
+SELECT branch
+     , revision
+     , scale
+     , builder_id
+     , build_number
+     , log_summary_id
+     , log_test_id
+     , complete_at
+FROM data
+WHERE latest = 1
+ORDER BY complete_at DESC",
+            &[&test, &test2, &plant, &test_summary(test.as_str())],
+        )
+        .await
+        .map_err(|e| {
+            eprintln!("Failed to query: {}", e);
+            actix_web::error::ErrorInternalServerError("Query execution error")
+        })?;
+
+    let mut wtr = Writer::from_writer(Cursor::new(Vec::new()));
+    for row in rows {
+        let branch: String = row.get("branch");
+        if branch.is_empty() {
+            continue;
+        }
+
+        let output = Command::new("git")
+            .arg("show")
+            .arg("-s")
+            .arg("--format=\"%ct\"")
+            .arg::<String>(row.get("revision"))
+            .current_dir(data.postgres_path.as_str())
+            .output()
+            .expect("could not run git to get commit ctime");
+
+        if !output.status.success() {
+            let revision: String = row.get("revision");
+            eprintln!(
+                "failed to run git show on {} {}: {}",
+                branch,
+                revision,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let ctime = match std::str::from_utf8(&output.stdout)
+            .expect("could not read git show output")
+            .trim()
+            .trim_matches('"')
+            .to_string()
+            .parse::<i64>()
+        {
+            Ok(ctime) => ctime,
+            Err(e) => {
+                let revision: String = row.get("revision");
+                println!("error branch {} revision {}: {}", branch, revision, e);
+                continue;
+            }
+        };
+
+        let log_summary_id: i32 = row.get("log_summary_id");
+
+        let scale_str: String = row.get("scale");
+        let scale = if scale_str == "0" {
+            let log_test_id: i32 = row.get("log_test_id");
+            let raw_id = match test.as_str() {
+                "dbt2" => log_test_id,
+                "dbt3" => log_test_id,
+                _ => log_summary_id,
+            };
+            test_scale(&data, test.as_str(), raw_id)
+        } else {
+            scale_str.parse::<u32>().unwrap()
+        };
+
+        let raw_data = RawData {
+            branch: row.get("branch"),
+            revision: row.get("revision"),
+            scale,
+            ctime,
+            metric: test_metric(&data, test.as_str(), log_summary_id),
+            complete_at: row.get("complete_at"),
+        };
+        wtr.serialize(raw_data).unwrap();
+    }
+
+    let csv = String::from_utf8(wtr.into_inner().unwrap().into_inner()).unwrap();
+
+    Ok(HttpResponse::Ok().content_type("text/csv").body(csv))
 }
 
 #[get("/pf/{test}")]
@@ -513,6 +702,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(data.clone()))
             .service(actix_files::Files::new("/static", "./static").show_files_listing())
             .service(home)
+            .service(api_test_plant)
             .service(pf_test)
             .service(pf_test_plant)
     })
