@@ -375,6 +375,7 @@ ORDER BY complete_at DESC",
     context.insert("postgres_commit_url", &data.postgres_commit_url.as_str());
     context.insert("scales", &results_by_scale);
     context.insert("metric_name", &test_metric_name(test.as_str()));
+    context.insert("test", &test.as_str());
     context.insert("title", &test_title(test.as_str()));
     context.insert("unit", &scale_factor_unit(test.as_str()));
 
@@ -510,6 +511,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(data.clone()))
+            .service(actix_files::Files::new("/static", "./static").show_files_listing())
             .service(home)
             .service(pf_test)
             .service(pf_test_plant)

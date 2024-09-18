@@ -17,6 +17,10 @@
 {% for scale, branches in scales %}
 
     <h2>{{ scale }} {{ unit }}</h2>
+
+    <a href="/static/{{ test }}-{{ plant }}-{{scale}}.png" target="_blank">
+      <image src="/static/{{ test }}-{{ plant }}-{{scale}}.png" alt="{{ test }} {{ plant }} {{scale}} Chart" style="display: block; margin: auto; width: 50%" />
+    </a>
   {% for branch, results in branches %}
     {% if loop.first %}
       {% set_global reversed_branches = [] %}
